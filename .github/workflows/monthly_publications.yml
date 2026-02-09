@@ -1,0 +1,44 @@
+name: Monthly Publications Auto Update
+
+on:
+  schedule:
+    - cron: '0 2 1 * *'   # 1st of month, 02:00 UTC
+  workflow_dispatch:
+
+jobs:
+  publications:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v4
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        pip install requests beautifulsoup4 rapidfuzz
+
+    - name: Run updater
+      run: |
+        python update_publications.py
+
+    - name: Commit updated files
+      run: |
+        git config --global user.name "github-actions"
+        git config --global user.email "github-actions@github.com"
+        git add publications_updated.html monthly_report.txt
+        git commit -m "Monthly publications update (auto)" || echo "No changes"
+        git push
+
+    - name: Send email report
+      env:
+        EMAIL_USER: ${{ secrets.EMAIL_USER }}
+        EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+        EMAIL_TO_1: ${{ secrets.EMAIL_TO_1 }}
+        EMAIL_TO_2: ${{ secrets.EMAIL_TO_2 }}
+      run: |
+        python send_email.py
