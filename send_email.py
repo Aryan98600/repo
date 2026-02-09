@@ -15,7 +15,7 @@ with open("monthly_report.txt", "r", encoding="utf-8") as f:
 msg = MIMEMultipart()
 msg["From"] = EMAIL_USER
 msg["To"] = f"{EMAIL_TO_1}, {EMAIL_TO_2}"
-msg["Subject"] = "Monthly Publications Update – Auto Generated"
+msg["Subject"] = "SparcLab Monthly Publications Update Code – Auto Generated"
 
 msg.attach(MIMEText(report_text, "plain"))
 
