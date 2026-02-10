@@ -58,11 +58,11 @@ jobs:
           secure: true
           username: ${{ secrets.EMAIL_USERNAME }}
           password: ${{ secrets.EMAIL_PASSWORD }}
-          subject: "Bot Report: Publications Updated"
+          subject: "Monthly SparcLab Publication Updates"
           
           # ADD MULTIPLE EMAILS HERE (Comma separated)
           to: jadhav.aryanashok.bme21@itbhu.ac.in,mroycho@purdue.edu
           
-          from: GitHub Bot <${{ secrets.EMAIL_USERNAME }}>
+          from: Aryan Jadhav <${{ secrets.EMAIL_USERNAME }}>
           body: file://report.txt
           attachments: publications.html
