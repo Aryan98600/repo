@@ -1,14 +1,18 @@
+import os 
 import requests
 from bs4 import BeautifulSoup
 import re
 import time
+import random 
 from rapidfuzz import fuzz
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # ==========================================
 # CONFIGURATION
 # ==========================================
-USER_ID = "_4mmNBMAAAAJ"        # Google Scholar ID
-TARGET_YEAR = "2026"            # Enter "2025" or "ALL"
+USER_ID = "_4mmNBMAAAAJ" 
+TARGET_YEAR = "2026"
 HTML_FILE = "publications.html"
 OUTPUT_FILE = "publications_updated.html"
 
@@ -38,16 +42,59 @@ VENUE_ACRONYMS = {
 }
 
 # ==========================================
-# FUNCTIONS
+# ROBUST FUNCTIONS
 # ==========================================
 
+def get_session():
+    """Creates a session with retry logic."""
+    session = requests.Session()
+    retry = Retry(connect=3, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount('http://', adapter)
+    session.mount('https://', adapter)
+    return session
+
 def get_soup(url):
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    """Robust fetcher with Cookie Injection and Random User Agents."""
+    user_agents = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Safari/605.1.15",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36"
+    ]
+    
+    headers = {
+        "User-Agent": random.choice(user_agents),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Referer": "https://scholar.google.com/",
+        "DNT": "1",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+    }
+
+    # INJECT COOKIES FROM SECRETS
+    cookies_env = os.environ.get("SCHOLAR_COOKIES")
+    cookies = {}
+    if cookies_env:
+        for item in cookies_env.split(';'):
+            if '=' in item:
+                k, v = item.strip().split('=', 1)
+                cookies[k] = v
+
+    session = get_session()
+    
     try:
-        response = requests.get(url, headers=headers)
+        print(f"    Requesting: {url}...")
+        response = session.get(url, headers=headers, cookies=cookies, timeout=10)
+        
+        if "captcha" in response.text.lower() or "unusual traffic" in response.text.lower():
+            print("!!! BLOCKED BY GOOGLE (CAPTCHA DETECTED) !!!")
+            return None
+            
         response.raise_for_status()
-        time.sleep(1.5) 
+        time.sleep(random.uniform(3, 6)) 
         return BeautifulSoup(response.text, "html.parser")
+        
     except Exception as e:
         print(f"Request failed: {e}")
         return None
@@ -153,14 +200,12 @@ def parse_existing_html_full_structure(html_file):
                 parsed_papers[cat_id].append({"title": title, "year": year, "raw_content": content_cleaned, "is_new": False})
     return parsed_papers, soup, max_ids
 
-
 def reconstruct_html(soup, all_data, current_max_ids):
     for cat_id in ["journals", "conferences"]:
         prefix = "J" if cat_id == "journals" else "C"
         new_papers = [p for p in all_data[cat_id] if p.get('is_new')]
         old_papers = [p for p in all_data[cat_id] if not p.get('is_new')]
         
-        # Incremental ID Assignment
         total_new = len(new_papers)
         for i, paper in enumerate(new_papers):
             paper['new_id'] = f"{prefix}{current_max_ids[prefix] + total_new - i}"
@@ -187,34 +232,23 @@ def reconstruct_html(soup, all_data, current_max_ids):
             
             for p in papers_by_year[year]:
                 if p.get('is_new'):
-                    # --- NEW LOGIC START ---
                     venue_text = p['venue']
-                    acro = extract_acronym(venue_text) # 1. Check your manual list first
-
-                    # 2. Fallback: Auto-detect (ACRONYM) in parens if not in list
+                    acro = extract_acronym(venue_text) 
                     if not acro:
-                        # Regex looks for (ABC) at the end of the string
                         match = re.search(r'\((?P<found>[A-Z0-9-]{2,})\)$', venue_text.strip())
                         if match:
                             acro = match.group('found')
-
-                    # 3. Construction & Cleanup
                     if acro:
-                        # Remove the acronym from the venue text so it doesn't appear twice
                         venue_text = venue_text.replace(f"({acro})", "").strip()
                         acro_html = f'<b>({acro})</b>'
                     else:
                         acro_html = ""
-                    # --- NEW LOGIC END ---
 
                     link = p.get('article_link') or p.get('pdf_link') or p['details_url']
-                    
-                    # Note: Using venue_text (cleaned) + acro_html (bolded)
                     content = f'{p["new_id"]}. {format_authors(p["authors"])}, "{p["title"]}", in {venue_text} {acro_html} - Jan {year} [ <a href="{link}" target="_blank" class="fa fa-file-pdf-o" style="color:red"></a> <a href="{link}" target="_blank"> Paper Link</a> ]'
                 else:
                     content = f"{prefix}{len(old_papers) - old_papers.index(p)}. {p['raw_content']}"
                 
-                # Safer Append Method
                 p_tag_soup = BeautifulSoup(f"<p>{content}</p>", "html.parser")
                 if p_tag_soup.p:
                     new_div.append(p_tag_soup.p)
@@ -223,32 +257,20 @@ def reconstruct_html(soup, all_data, current_max_ids):
             insert_marker = new_div
     return soup
 
-
 # ==========================================
-# EXECUTION
-# ==========================================
-
-
-# ... (Keep all your imports and functions exactly as they are) ...
-
-# ==========================================
-# HEADLESS EXECUTION (For GitHub Actions)
+# EXECUTION (HEADLESS)
 # ==========================================
 if __name__ == "__main__":
-    # 1. Fetch Data
     scholar_data = fetch_scholar_data(USER_ID, TARGET_YEAR)
     parsed_data, soup, max_ids = parse_existing_html_full_structure(HTML_FILE)
 
-    # 2. Identify Missing Papers
     missing_papers = []
     all_existing_titles = [p['title'].lower() for p in parsed_data['journals'] + parsed_data['conferences']]
     
     for sp in scholar_data:
-        # Check fuzzy match to avoid duplicates
         if not any(fuzz.ratio(sp['title'].lower(), et) > 90 for et in all_existing_titles):
             missing_papers.append(sp)
 
-    # 3. Process Papers (Headless Mode: Always take ALL new papers)
     report_lines = []
     
     if not missing_papers:
@@ -257,8 +279,6 @@ if __name__ == "__main__":
         report_lines.append(msg)
     else:
         print(f"Found {len(missing_papers)} new papers. Adding ALL automatically...")
-        
-        # In automation, we skip the input() and just iterate over all missing_papers
         for p in missing_papers:
             details = get_full_paper_details(p['details_url'])
             if details: p.update(details)
@@ -266,7 +286,6 @@ if __name__ == "__main__":
             key = 'journals' if p['category'] == "Journal Papers" else 'conferences'
             parsed_data[key].append(p)
 
-        # 4. Save Updated HTML
         updated_soup = reconstruct_html(soup, parsed_data, max_ids)
         with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
             f.write(updated_soup.prettify())
@@ -274,7 +293,6 @@ if __name__ == "__main__":
         success_msg = f"Success! {len(missing_papers)} added. Updated {OUTPUT_FILE}"
         print(success_msg)
         
-        # 5. Generate Report for Email
         report_lines.append("="*60)
         report_lines.append(f" REPORT: {len(missing_papers)} NEW ENTRIES ADDED")
         report_lines.append(f" Target Year: {TARGET_YEAR}")
@@ -292,6 +310,5 @@ if __name__ == "__main__":
                     report_lines.append(f"    Venue: {p['venue']}")
                     report_lines.append("-" * 40)
 
-    # 6. Save Report to file (Critical for the Email Step)
     with open("report.txt", "w", encoding="utf-8") as f:
         f.write("\n".join(report_lines))
