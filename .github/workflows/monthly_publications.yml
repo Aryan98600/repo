@@ -5,9 +5,12 @@ on:
     - cron: '0 2 1 * *'   # 1st of month, 02:00 UTC
   workflow_dispatch:
 
+
 jobs:
   publications:
     runs-on: ubuntu-latest
+    permissions:                # <--- ADD THIS BLOCK
+      contents: write           # <--- This allows the bot to push code
 
     steps:
     - name: Checkout repo
