@@ -3,12 +3,13 @@ import requests
 from bs4 import BeautifulSoup
 import re
 import datetime
+import time # Added for safety
 
 # ==========================================
 # CONFIGURATION
 # ==========================================
-USER_ID = "_4mmNBMAAAAJ"  # Your Google Scholar ID
-TARGET_YEAR = "2026"      # Year to scan for
+USER_ID = "_4mmNBMAAAAJ" 
+TARGET_YEAR = "2026"     
 HTML_FILE = "publications.html"
 OUTPUT_FILE = "publications_updated.html"
 API_KEY = os.environ.get("SERP_API_KEY")
@@ -39,11 +40,49 @@ VENUE_ACRONYMS = {
 }
 
 # ==========================================
-# FUNCTIONS
+# HELPER FUNCTIONS
 # ==========================================
 
+def get_real_publisher_link(scholar_url):
+    """
+    Visits the Google Scholar internal citation page to find the 
+    Publisher URL (Title Link) or PDF Link.
+    """
+    if not scholar_url: return None
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    }
+    
+    try:
+        # We perform a lightweight request to the scholar detail page
+        response = requests.get(scholar_url, headers=headers, timeout=10)
+        if response.status_code != 200:
+            return scholar_url # Fallback to scholar link if fail
+            
+        soup = BeautifulSoup(response.text, "html.parser")
+        
+        # 1. Try to find the Main Article Link (The Title Link)
+        title_link = soup.find("a", class_="gsc_oci_title_link")
+        if title_link and title_link.get("href"):
+            return title_link.get("href")
+            
+        # 2. If not found, try finding a PDF link on the right side
+        ggi = soup.find("div", class_="gsc_oci_title_ggi")
+        if ggi:
+            pdf_link = ggi.find("a")
+            if pdf_link and pdf_link.get("href"):
+                return pdf_link.get("href")
+                
+        # 3. If neither found, return the original scholar link
+        return scholar_url
+        
+    except Exception as e:
+        print(f"Warning: Could not resolve deep link: {e}")
+        return scholar_url
+
 def fetch_papers_via_api():
-    """Fetches papers using SerpApi to avoid Google blocks."""
+    """Fetches papers using SerpApi and then resolves deep links."""
     if not API_KEY:
         print("Error: SERP_API_KEY not found in secrets.")
         return []
@@ -51,11 +90,11 @@ def fetch_papers_via_api():
     print(f"Fetching papers for User {USER_ID} via SerpApi...")
     
     params = {
-        "engine": "google_scholar_author",  # <--- FIXED: WAS "google_scholar"
+        "engine": "google_scholar_author",
         "author_id": USER_ID,
         "api_key": API_KEY,
-        "sort": "pubdate", # Sort by newest
-        "num": 20          # Check last 20 papers
+        "sort": "pubdate",
+        "num": 20 
     }
     
     try:
@@ -63,30 +102,32 @@ def fetch_papers_via_api():
         response.raise_for_status()
         data = response.json()
         
-        # SerpApi Author endpoint returns 'articles' list
         articles = data.get("articles", [])
         valid_papers = []
         
         for art in articles:
-            # Safe extraction of year
             year = art.get("year", "Unknown")
             
             # Filter by Target Year
             if TARGET_YEAR != "ALL" and str(year) != str(TARGET_YEAR):
                 continue
                 
-            # Formatting Data
-            # SerpApi Author response structure is slightly different:
-            # "publication" field usually holds the venue
             venue_raw = art.get("publication", "") 
             venue_clean = venue_raw.strip()
+            scholar_link = art.get("link")
             
+            # --- THE FIX: RESOLVE DEEP LINK ---
+            print(f"Resolving link for: {art.get('title')[:30]}...")
+            final_link = get_real_publisher_link(scholar_link)
+            time.sleep(1) # Polite pause to avoid rate limiting on the scraper part
+            # ----------------------------------
+
             paper = {
                 "title": art.get("title"),
-                "authors": art.get("authors", "Unknown"), # Usually a string in Author API
+                "authors": art.get("authors", "Unknown"), 
                 "venue": venue_clean,
                 "year": str(year),
-                "link": art.get("link"), 
+                "link": final_link, # Updated to use the resolved link
                 "category": "Conference Papers" if any(x in venue_clean.lower() for x in ["conf", "proc", "symp", "meeting"]) else "Journal Papers"
             }
             valid_papers.append(paper)
@@ -94,18 +135,12 @@ def fetch_papers_via_api():
         return valid_papers
 
     except Exception as e:
-        # Print full error details for debugging
         print(f"API Request Failed: {e}")
-        if 'response' in locals():
-            print(f"Response Content: {response.text}")
         return []
 
 def format_authors(author_string):
     if not author_string or author_string == "Unknown": return author_string
-    
-    # SerpApi Author API returns authors as a single string "A Author, B Author"
     names = author_string.split(',')
-        
     formatted = []
     for name in names:
         parts = name.strip().split()
@@ -117,16 +152,13 @@ def format_authors(author_string):
 
 def extract_acronym(venue_name):
     if not venue_name: return None
-    # 1. Check Manual Dictionary
     for key, acro in VENUE_ACRONYMS.items():
         if key.lower() in venue_name.lower(): return acro
-    # 2. Check Parentheses Regex
     match = re.search(r'\((?P<found>[A-Z0-9-]{2,})\)$', venue_name.strip())
     if match: return match.group('found')
     return None
 
 def parse_existing_html(html_file):
-    """Parses existing HTML to find current Max IDs and Titles."""
     try:
         with open(html_file, "r", encoding="utf-8") as f:
             soup = BeautifulSoup(f, "html.parser")
@@ -145,18 +177,13 @@ def parse_existing_html(html_file):
             year = div.get('data-year', "Unknown")
             for p in div.find_all('p'):
                 text = p.get_text(" ", strip=True)
-                
-                # Extract ID to find max
                 id_match = re.match(rf'^\s*({prefix})(\d+)\.', text)
                 if id_match:
                     num = int(id_match.group(2))
                     if num > max_ids[prefix]: max_ids[prefix] = num
                 
-                # Extract Title for duplicate checking
                 title_match = re.search(r'["“]([^"”]+)["”]', text)
                 title = title_match.group(1) if title_match else ""
-                
-                # Clean content for reconstruction
                 content_cleaned = re.sub(rf'^\s*{prefix}\d+\.\s*', '', p.decode_contents()).strip()
                 
                 parsed_papers[cat_id].append({
@@ -173,20 +200,15 @@ def reconstruct_html(soup, all_data, current_max_ids):
         new_papers = [p for p in all_data[cat_id] if p.get('is_new')]
         old_papers = [p for p in all_data[cat_id] if not p.get('is_new')]
         
-        # Assign New IDs
         total_new = len(new_papers)
         for i, paper in enumerate(new_papers):
             paper['new_id'] = f"{prefix}{current_max_ids[prefix] + total_new - i}"
         
-        # Merge and Sort
         final_list = new_papers + old_papers
-        
-        # Clear container
         container = soup.find("div", id=cat_id)
         if not container: continue
         for div in container.find_all("div", class_="filterDiv"): div.decompose()
         
-        # Group by Year
         papers_by_year = {}
         for p in final_list:
             y = p['year'] if p['year'] else "Unknown"
@@ -204,7 +226,6 @@ def reconstruct_html(soup, all_data, current_max_ids):
             
             for p in papers_by_year[year]:
                 if p.get('is_new'):
-                    # --- NEW FORMATTING LOGIC ---
                     venue_text = p['venue']
                     acro = extract_acronym(venue_text)
                     if acro:
@@ -218,7 +239,6 @@ def reconstruct_html(soup, all_data, current_max_ids):
                     
                     content = f'{p["new_id"]}. {fmt_auth}, "{p["title"]}", in {venue_text} {acro_html} - Jan {year} [ <a href="{link}" target="_blank" class="fa fa-file-pdf-o" style="color:red"></a> <a href="{link}" target="_blank"> Paper Link</a> ]'
                 else:
-                    # Restore ID
                     content = f"{prefix}{len(old_papers) - old_papers.index(p)}. {p['raw_content']}"
                 
                 p_tag_soup = BeautifulSoup(f"<p>{content}</p>", "html.parser")
@@ -233,31 +253,25 @@ def reconstruct_html(soup, all_data, current_max_ids):
 # MAIN EXECUTION
 # ==========================================
 if __name__ == "__main__":
-    # 1. Fetch Existing Data
     parsed_data, soup, max_ids = parse_existing_html(HTML_FILE)
     if not soup:
         print("Error: Could not parse HTML file.")
         exit(1)
 
-    # 2. Fetch New Papers via API
     api_papers = fetch_papers_via_api()
     
-    # 3. Check for Duplicates (Fuzzy Match or Exact Title)
     missing_papers = []
     existing_titles = [p['title'].lower().strip() for p in parsed_data['journals'] + parsed_data['conferences']]
     
     for new_p in api_papers:
         is_duplicate = False
         new_title = new_p['title'].lower().strip()
-        
-        # Exact match check
         if new_title in existing_titles:
             is_duplicate = True
         
         if not is_duplicate:
             missing_papers.append(new_p)
 
-    # 4. Generate Report & Update
     report_lines = []
     
     if not missing_papers:
@@ -277,7 +291,6 @@ if __name__ == "__main__":
         with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
             f.write(updated_soup.prettify())
             
-        # Report Generation
         report_lines.append("="*60)
         report_lines.append(f" AUTO-UPDATE REPORT: {len(missing_papers)} NEW ENTRIES")
         report_lines.append(f" Target Year: {TARGET_YEAR}")
@@ -292,13 +305,12 @@ if __name__ == "__main__":
                     acro_disp = acro if acro else "None Detected"
                     link = p.get('link', 'No Link')
                     
-                    report_lines.append(f"ID:      {p['new_id']}")
-                    report_lines.append(f"Title:   {p['title']}")
-                    report_lines.append(f"Venue:   {p['venue']}")
+                    report_lines.append(f"ID:       {p['new_id']}")
+                    report_lines.append(f"Title:    {p['title']}")
+                    report_lines.append(f"Venue:    {p['venue']}")
                     report_lines.append(f"Acronym: {acro_disp}")
-                    report_lines.append(f"Link:    {link}")
+                    report_lines.append(f"Link:     {link}")
                     report_lines.append("-" * 40)
 
-    # 5. Write Report
     with open("report.txt", "w", encoding="utf-8") as f:
         f.write("\n".join(report_lines))
