@@ -8,8 +8,8 @@ on:
 jobs:
   publications:
     runs-on: ubuntu-latest
-    permissions:                # <--- CORRECTED: Aligned with runs-on
-      contents: write           # <--- CORRECTED: Standard 2-space indent
+    permissions:
+      contents: write           # <--- GRANTS WRITE ACCESS
 
     steps:
     - name: Checkout repo
@@ -28,18 +28,20 @@ jobs:
       run: |
         python update_publications.py
 
-
-
     - name: Commit updated files
       run: |
         git config --global user.name "github-actions"
         git config --global user.email "github-actions@github.com"
         
-        # RENAME the updated file to the main file so the changes persist
-        mv publications_updated.html publications.html
-        
-        git add publications.html monthly_report.txt
-        git commit -m "Monthly publications update (auto)" && git push || echo "No changes to commit"
+        # Move the updated file to the main file (overwrite)
+        # This -f check prevents crash if python failed silentely
+        if [ -f publications_updated.html ]; then
+          mv publications_updated.html publications.html
+          git add publications.html monthly_report.txt
+          git commit -m "Monthly publications update (auto)" && git push || echo "No changes to commit"
+        else
+          echo "Warning: No updated HTML file found."
+        fi
 
     - name: Send email report
       env:
