@@ -3,13 +3,12 @@ import requests
 from bs4 import BeautifulSoup
 import re
 import datetime
-import time # Added for safety
 
 # ==========================================
 # CONFIGURATION
 # ==========================================
-USER_ID = "_4mmNBMAAAAJ" 
-TARGET_YEAR = "2026"     
+USER_ID = "_4mmNBMAAAAJ"  
+TARGET_YEAR = "2026"      
 HTML_FILE = "publications.html"
 OUTPUT_FILE = "publications_updated.html"
 API_KEY = os.environ.get("SERP_API_KEY")
@@ -40,49 +39,49 @@ VENUE_ACRONYMS = {
 }
 
 # ==========================================
-# HELPER FUNCTIONS
+# FUNCTIONS
 # ==========================================
 
-def get_real_publisher_link(scholar_url):
+def get_publisher_link_via_api(citation_id):
     """
-    Visits the Google Scholar internal citation page to find the 
-    Publisher URL (Title Link) or PDF Link.
+    Uses SerpApi to fetch the specific citation details.
+    This reliably gets the Publisher URL (IEEE, Nature, etc.) 
+    without getting blocked by Google.
     """
-    if not scholar_url: return None
+    if not citation_id: return None
     
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    print(f"   > Fetching deep link for citation: {citation_id}...")
+    params = {
+        "engine": "google_scholar_author",
+        "view_op": "view_citation",
+        "citation_id": citation_id,
+        "api_key": API_KEY
     }
     
     try:
-        # We perform a lightweight request to the scholar detail page
-        response = requests.get(scholar_url, headers=headers, timeout=10)
-        if response.status_code != 200:
-            return scholar_url # Fallback to scholar link if fail
-            
-        soup = BeautifulSoup(response.text, "html.parser")
+        response = requests.get("https://serpapi.com/search", params=params)
+        response.raise_for_status()
+        data = response.json()
         
-        # 1. Try to find the Main Article Link (The Title Link)
-        title_link = soup.find("a", class_="gsc_oci_title_link")
-        if title_link and title_link.get("href"):
-            return title_link.get("href")
-            
-        # 2. If not found, try finding a PDF link on the right side
-        ggi = soup.find("div", class_="gsc_oci_title_ggi")
-        if ggi:
-            pdf_link = ggi.find("a")
-            if pdf_link and pdf_link.get("href"):
-                return pdf_link.get("href")
+        # 1. Try to get the Direct PDF link first (Best)
+        resources = data.get("citation", {}).get("resources", [])
+        for res in resources:
+            if res.get("file_format") == "PDF":
+                return res.get("link")
                 
-        # 3. If neither found, return the original scholar link
-        return scholar_url
-        
+        # 2. Try to get the Publisher Link (Second Best)
+        # In the 'view_citation' response, the title often has a link
+        citation_data = data.get("citation", {})
+        if citation_data.get("link"):
+            return citation_data.get("link")
+            
+        return None
     except Exception as e:
-        print(f"Warning: Could not resolve deep link: {e}")
-        return scholar_url
+        print(f"   > Deep link fetch failed: {e}")
+        return None
 
 def fetch_papers_via_api():
-    """Fetches papers using SerpApi and then resolves deep links."""
+    """Fetches papers using SerpApi main list + individual lookup."""
     if not API_KEY:
         print("Error: SERP_API_KEY not found in secrets.")
         return []
@@ -114,20 +113,20 @@ def fetch_papers_via_api():
                 
             venue_raw = art.get("publication", "") 
             venue_clean = venue_raw.strip()
+            citation_id = art.get("citation_id") # We need this ID
             scholar_link = art.get("link")
             
-            # --- THE FIX: RESOLVE DEEP LINK ---
-            print(f"Resolving link for: {art.get('title')[:30]}...")
-            final_link = get_real_publisher_link(scholar_link)
-            time.sleep(1) # Polite pause to avoid rate limiting on the scraper part
-            # ----------------------------------
+            # Use Scholar link temporarily; we will upgrade it if it's new later
+            # OR we can upgrade it now. Doing it now ensures accuracy.
+            real_link = get_publisher_link_via_api(citation_id)
+            final_link = real_link if real_link else scholar_link
 
             paper = {
                 "title": art.get("title"),
                 "authors": art.get("authors", "Unknown"), 
                 "venue": venue_clean,
                 "year": str(year),
-                "link": final_link, # Updated to use the resolved link
+                "link": final_link, 
                 "category": "Conference Papers" if any(x in venue_clean.lower() for x in ["conf", "proc", "symp", "meeting"]) else "Journal Papers"
             }
             valid_papers.append(paper)
