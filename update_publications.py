@@ -257,6 +257,9 @@ def reconstruct_html(soup, all_data, current_max_ids):
             insert_marker = new_div
     return soup
 
+
+
+
 # ==========================================
 # EXECUTION (HEADLESS)
 # ==========================================
@@ -293,22 +296,35 @@ if __name__ == "__main__":
         success_msg = f"Success! {len(missing_papers)} added. Updated {OUTPUT_FILE}"
         print(success_msg)
         
+        # --- DETAILED REPORT GENERATION ---
         report_lines.append("="*60)
-        report_lines.append(f" REPORT: {len(missing_papers)} NEW ENTRIES ADDED")
+        report_lines.append(f" AUTO-UPDATE REPORT: {len(missing_papers)} NEW ENTRIES")
         report_lines.append(f" Target Year: {TARGET_YEAR}")
         report_lines.append("="*60)
 
         for cat in ["journals", "conferences"]:
             new_entries = [p for p in parsed_data[cat] if p.get('is_new')]
             if new_entries:
-                report_lines.append(f"\n[{cat.upper()}]")
+                report_lines.append(f"\n--- {cat.upper()} ---")
                 for p in new_entries:
-                    raw_auth = p.get('authors', 'Unknown').strip().rstrip(",")
-                    fmt_auth = format_authors(raw_auth)
-                    report_lines.append(f"{p['new_id']}. {fmt_auth}")
-                    report_lines.append(f"    Title: \"{p['title']}...\"")
-                    report_lines.append(f"    Venue: {p['venue']}")
+                    # Logic to find Acronym for Report
+                    acro = extract_acronym(p['venue'])
+                    if not acro:
+                         match = re.search(r'\((?P<found>[A-Z0-9-]{2,})\)$', p['venue'].strip())
+                         if match: acro = match.group('found')
+                    acro_disp = acro if acro else "None Detected"
+
+                    # Logic to find Link for Report
+                    link = p.get('article_link') or p.get('pdf_link') or p['details_url']
+                    
+                    # Formatting
+                    report_lines.append(f"ID:      {p['new_id']}")
+                    report_lines.append(f"Title:   {p['title']}")
+                    report_lines.append(f"Venue:   {p['venue']}")
+                    report_lines.append(f"Acronym: {acro_disp}")
+                    report_lines.append(f"Link:    {link}")
                     report_lines.append("-" * 40)
 
     with open("report.txt", "w", encoding="utf-8") as f:
         f.write("\n".join(report_lines))
+
