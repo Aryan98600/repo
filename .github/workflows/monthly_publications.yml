@@ -34,7 +34,7 @@ jobs:
         git config --global user.name "github-actions"
         git config --global user.email "github-actions@github.com"
         git add publications_updated.html monthly_report.txt
-        git commit -m "Monthly publications update (auto)" || echo "No changes"
+        git commit -m "Monthly publications update (auto)" && git push || echo "No changes to commit"
         git push
 
     - name: Send email report
