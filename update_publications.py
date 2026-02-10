@@ -51,7 +51,7 @@ def fetch_papers_via_api():
     print(f"Fetching papers for User {USER_ID} via SerpApi...")
     
     params = {
-        "engine": "google_scholar",
+        "engine": "google_scholar_author",  # <--- FIXED: WAS "google_scholar"
         "author_id": USER_ID,
         "api_key": API_KEY,
         "sort": "pubdate", # Sort by newest
@@ -63,33 +63,30 @@ def fetch_papers_via_api():
         response.raise_for_status()
         data = response.json()
         
+        # SerpApi Author endpoint returns 'articles' list
         articles = data.get("articles", [])
         valid_papers = []
         
         for art in articles:
             # Safe extraction of year
-            pub_info = art.get("publication_info", {})
-            summary = pub_info.get("summary", "")
-            
-            # Extract year from summary string (e.g. "S Sen... - 2025 - publisher")
-            year_match = re.search(r'\b(20\d{2})\b', summary)
-            year = year_match.group(1) if year_match else "Unknown"
+            year = art.get("year", "Unknown")
             
             # Filter by Target Year
-            if TARGET_YEAR != "ALL" and year != TARGET_YEAR:
+            if TARGET_YEAR != "ALL" and str(year) != str(TARGET_YEAR):
                 continue
                 
             # Formatting Data
-            venue_raw = summary.split('-')[1].strip() if '-' in summary else ""
-            # Sometimes venue is mixed with year, clean it up roughly
-            venue_clean = re.sub(r'\b20\d{2}\b', '', venue_raw).strip()
+            # SerpApi Author response structure is slightly different:
+            # "publication" field usually holds the venue
+            venue_raw = art.get("publication", "") 
+            venue_clean = venue_raw.strip()
             
             paper = {
                 "title": art.get("title"),
-                "authors": pub_info.get("authors", "Unknown"), # SerpApi gives authors list
+                "authors": art.get("authors", "Unknown"), # Usually a string in Author API
                 "venue": venue_clean,
-                "year": year,
-                "link": art.get("link"), # Direct PDF or publisher link
+                "year": str(year),
+                "link": art.get("link"), 
                 "category": "Conference Papers" if any(x in venue_clean.lower() for x in ["conf", "proc", "symp", "meeting"]) else "Journal Papers"
             }
             valid_papers.append(paper)
@@ -97,15 +94,17 @@ def fetch_papers_via_api():
         return valid_papers
 
     except Exception as e:
+        # Print full error details for debugging
         print(f"API Request Failed: {e}")
+        if 'response' in locals():
+            print(f"Response Content: {response.text}")
         return []
 
 def format_authors(author_string):
-    # SerpApi sometimes returns a list, sometimes a string. Handle both.
-    if isinstance(author_string, list):
-        names = [n.get("name", "") for n in author_string]
-    else:
-        names = author_string.split(',')
+    if not author_string or author_string == "Unknown": return author_string
+    
+    # SerpApi Author API returns authors as a single string "A Author, B Author"
+    names = author_string.split(',')
         
     formatted = []
     for name in names:
@@ -279,15 +278,26 @@ if __name__ == "__main__":
             f.write(updated_soup.prettify())
             
         # Report Generation
-        report_lines.append(f"UPDATE REPORT ({datetime.date.today()})")
-        report_lines.append(f"New Papers Added: {len(missing_papers)}")
-        report_lines.append("-" * 30)
-        
-        for p in missing_papers:
-            report_lines.append(f"Title: {p['title']}")
-            report_lines.append(f"Venue: {p['venue']}")
-            report_lines.append(f"Link:  {p['link']}")
-            report_lines.append("-" * 30)
+        report_lines.append("="*60)
+        report_lines.append(f" AUTO-UPDATE REPORT: {len(missing_papers)} NEW ENTRIES")
+        report_lines.append(f" Target Year: {TARGET_YEAR}")
+        report_lines.append("="*60)
+
+        for cat in ["journals", "conferences"]:
+            new_entries = [p for p in parsed_data[cat] if p.get('is_new')]
+            if new_entries:
+                report_lines.append(f"\n--- {cat.upper()} ---")
+                for p in new_entries:
+                    acro = extract_acronym(p['venue'])
+                    acro_disp = acro if acro else "None Detected"
+                    link = p.get('link', 'No Link')
+                    
+                    report_lines.append(f"ID:      {p['new_id']}")
+                    report_lines.append(f"Title:   {p['title']}")
+                    report_lines.append(f"Venue:   {p['venue']}")
+                    report_lines.append(f"Acronym: {acro_disp}")
+                    report_lines.append(f"Link:    {link}")
+                    report_lines.append("-" * 40)
 
     # 5. Write Report
     with open("report.txt", "w", encoding="utf-8") as f:
