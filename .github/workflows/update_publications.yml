@@ -47,7 +47,8 @@ jobs:
             echo "No new papers found. Nothing to push."
           fi
 
-      # 6. Send Email
+
+          # 6. Send Email
       - name: Send email
         if: hashFiles('report.txt') != ''
         uses: dawidd6/action-send-mail@v3
@@ -58,7 +59,10 @@ jobs:
           username: ${{ secrets.EMAIL_USERNAME }}
           password: ${{ secrets.EMAIL_PASSWORD }}
           subject: "Bot Report: Publications Updated"
-          to: jadhav.aryanashok.bme21@itbhu.ac.in
+          
+          # ADD MULTIPLE EMAILS HERE (Comma separated)
+          to: jadhav.aryanashok.bme21@itbhu.ac.in,mroycho@purdue.edu
+          
           from: GitHub Bot <${{ secrets.EMAIL_USERNAME }}>
           body: file://report.txt
           attachments: publications.html
