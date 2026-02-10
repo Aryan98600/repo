@@ -2,82 +2,63 @@ name: Monthly Publications Update
 
 on:
   schedule:
-    # Runs at 00:00 UTC on the 1st of every month
     - cron: '0 0 1 * *'
-  workflow_dispatch: # Allows manual testing button
+  workflow_dispatch:
 
 jobs:
   update-and-email:
     runs-on: ubuntu-latest
-    
-    # Permissions needed to push changes back to the repo
     permissions:
       contents: write
 
     steps:
-      # 1. Checkout the repository
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # 2. Set up Python environment
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
 
-      # 3. Install dependencies from your requirements.txt
       - name: Install libraries
         run: |
           pip install -r requirements.txt
 
       # 4. Run your Headless Python Script
       - name: Run Update Script
+        env: 
+          SCHOLAR_COOKIES: ${{ secrets.SCHOLAR_COOKIES }}
         run: python update_publications.py
 
-      # 5. THE FIX: Overwrite the old file and Push
+      # 5. Overwrite the old file and Push
       - name: Commit and Push changes
         run: |
-          # Check if the script actually created a new file
           if [ -f "publications_updated.html" ]; then
             echo "New papers found. Overwriting original file..."
-            
-            # --- CRITICAL: THE LOOP FIX ---
-            # Rename updated file to the main filename, overwriting the old one
             mv publications_updated.html publications.html
             
-            # Configure Git Bot
             git config --global user.name "GitHub Action Bot"
             git config --global user.email "actions@github.com"
-            
-            # Stage the NOW MODIFIED original file
             git add publications.html
             
-            # Commit and Push
             git commit -m "Auto-update: New publications added [skip ci]"
             git push
           else
             echo "No new papers found. Nothing to push."
           fi
 
-      # 6. Send Email (Only if report.txt exists)
+      # 6. Send Email
       - name: Send email
-        if: hashFiles('report.txt') != '' # Only run if report exists
+        if: hashFiles('report.txt') != ''
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: smtp.gmail.com
           server_port: 465
           secure: true
-          
-          # Your Secrets (Set these in Repo Settings > Secrets)
           username: ${{ secrets.EMAIL_USERNAME }}
           password: ${{ secrets.EMAIL_PASSWORD }}
-          
           subject: "Bot Report: Publications Updated"
-          to: jadhav.aryanashok.bme21@itbhu.ac.in  # <--- REPLACE THIS WITH YOUR EMAIL
+          to: jadhav.aryanashok.bme21@itbhu.ac.in
           from: GitHub Bot <${{ secrets.EMAIL_USERNAME }}>
-          
-          # Use the generated text file as the email body
           body: file://report.txt
-          
-          # Attach the NEWLY UPDATED html file
           attachments: publications.html
