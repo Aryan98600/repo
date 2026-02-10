@@ -1,88 +1,17 @@
-import os  # <--- NEW IMPORT
+import os
 import requests
 from bs4 import BeautifulSoup
 import re
-import time
-import random # <--- NEW IMPORT
-from rapidfuzz import fuzz
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+import datetime
 
 # ==========================================
 # CONFIGURATION
 # ==========================================
-USER_ID = "_4mmNBMAAAAJ" 
-TARGET_YEAR = "2026"
+USER_ID = "_4mmNBMAAAAJ"  # Your Google Scholar ID
+TARGET_YEAR = "2026"      # Year to scan for
 HTML_FILE = "publications.html"
 OUTPUT_FILE = "publications_updated.html"
-
-# ... (Keep VENUE_ACRONYMS exactly as they are) ...
-
-# ==========================================
-# ROBUST FUNCTIONS (Updated for Bot Detection)
-# ==========================================
-
-def get_session():
-    """Creates a session with retry logic and browser mimicry."""
-    session = requests.Session()
-    
-    # Retry 3 times on failures (500, 502, 503, 504)
-    retry = Retry(connect=3, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
-    adapter = HTTPAdapter(max_retries=retry)
-    session.mount('http://', adapter)
-    session.mount('https://', adapter)
-    
-    return session
-
-def get_soup(url):
-    # 1. Randomize User-Agent to look less like a bot
-    user_agents = [
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Safari/605.1.15",
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36"
-    ]
-    
-    # 2. Construct Headers (The "Cookies" part is the magic fix)
-    headers = {
-        "User-Agent": random.choice(user_agents),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
-        "Referer": "https://scholar.google.com/",
-        "DNT": "1",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
-    }
-
-    # Inject Cookies from GitHub Secrets if available
-    cookies_env = os.environ.get("SCHOLAR_COOKIES")
-    cookies = {}
-    if cookies_env:
-        # Simple parser to convert cookie string to dictionary
-        for item in cookies_env.split(';'):
-            if '=' in item:
-                k, v = item.strip().split('=', 1)
-                cookies[k] = v
-
-    session = get_session()
-    
-    try:
-        # Pass headers AND cookies to the request
-        print(f"    Requesting: {url}...")
-        response = session.get(url, headers=headers, cookies=cookies, timeout=10)
-        
-        # Check if we got a CAPTCHA (Status 200 but text contains captcha warning)
-        if "captcha" in response.text.lower() or "unusual traffic" in response.text.lower():
-            print("!!! BLOCKED BY GOOGLE (CAPTCHA DETECTED) !!!")
-            # If blocked, we can't do much without a proxy, but the cookies usually prevent this.
-            return None
-            
-        response.raise_for_status()
-        time.sleep(random.uniform(3, 6)) # Longer, random sleep is safer
-        return BeautifulSoup(response.text, "html.parser")
-        
-    except Exception as e:
-        print(f"Request failed: {e}")
-        return None
+API_KEY = os.environ.get("SERP_API_KEY")
 
 VENUE_ACRONYMS = {
     "Solid-State Circuits": "JSSC",
@@ -113,118 +42,131 @@ VENUE_ACRONYMS = {
 # FUNCTIONS
 # ==========================================
 
-def get_soup(url):
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+def fetch_papers_via_api():
+    """Fetches papers using SerpApi to avoid Google blocks."""
+    if not API_KEY:
+        print("Error: SERP_API_KEY not found in secrets.")
+        return []
+
+    print(f"Fetching papers for User {USER_ID} via SerpApi...")
+    
+    params = {
+        "engine": "google_scholar",
+        "author_id": USER_ID,
+        "api_key": API_KEY,
+        "sort": "pubdate", # Sort by newest
+        "num": 20          # Check last 20 papers
+    }
+    
     try:
-        response = requests.get(url, headers=headers)
+        response = requests.get("https://serpapi.com/search", params=params)
         response.raise_for_status()
-        time.sleep(1.5) 
-        return BeautifulSoup(response.text, "html.parser")
+        data = response.json()
+        
+        articles = data.get("articles", [])
+        valid_papers = []
+        
+        for art in articles:
+            # Safe extraction of year
+            pub_info = art.get("publication_info", {})
+            summary = pub_info.get("summary", "")
+            
+            # Extract year from summary string (e.g. "S Sen... - 2025 - publisher")
+            year_match = re.search(r'\b(20\d{2})\b', summary)
+            year = year_match.group(1) if year_match else "Unknown"
+            
+            # Filter by Target Year
+            if TARGET_YEAR != "ALL" and year != TARGET_YEAR:
+                continue
+                
+            # Formatting Data
+            venue_raw = summary.split('-')[1].strip() if '-' in summary else ""
+            # Sometimes venue is mixed with year, clean it up roughly
+            venue_clean = re.sub(r'\b20\d{2}\b', '', venue_raw).strip()
+            
+            paper = {
+                "title": art.get("title"),
+                "authors": pub_info.get("authors", "Unknown"), # SerpApi gives authors list
+                "venue": venue_clean,
+                "year": year,
+                "link": art.get("link"), # Direct PDF or publisher link
+                "category": "Conference Papers" if any(x in venue_clean.lower() for x in ["conf", "proc", "symp", "meeting"]) else "Journal Papers"
+            }
+            valid_papers.append(paper)
+            
+        return valid_papers
+
     except Exception as e:
-        print(f"Request failed: {e}")
-        return None
+        print(f"API Request Failed: {e}")
+        return []
 
 def format_authors(author_string):
-    if not author_string or author_string == "Unknown":
-        return author_string
-    formatted_list = []
-    names = [n.strip() for n in author_string.split(',')]
+    # SerpApi sometimes returns a list, sometimes a string. Handle both.
+    if isinstance(author_string, list):
+        names = [n.get("name", "") for n in author_string]
+    else:
+        names = author_string.split(',')
+        
+    formatted = []
     for name in names:
-        parts = name.split()
+        parts = name.strip().split()
         if len(parts) >= 2:
-            formatted_list.append(f"{parts[0][0]}. {parts[-1]}")
+            formatted.append(f"{parts[0][0]}. {parts[-1]}")
         else:
-            formatted_list.append(name)
-    return ", ".join(formatted_list)
-
-def classify_paper(venue):
-    v = venue.lower()
-    if re.search(r'\b(patent|pat\.|app\.|us\s?\d|wo\s?\d)\b', v): return "Patents"
-    if re.search(r'\b(arxiv|biorxiv|medrxiv|ssrn|tech\.\s?rep)\b', v): return "Journal Papers"
-    conf_keywords = ["conference", "symposium", "proceeding", "proc.", "workshop", "digest", "meeting", "congress", "isscc", "dac", "cicc", "embc", "vlsi", "iscas", "biocas", "ims", "date", "bsn"]
-    if any(k in v for k in conf_keywords): return "Conference Papers"
-    return "Journal Papers"
+            formatted.append(name)
+    return ", ".join(formatted)
 
 def extract_acronym(venue_name):
     if not venue_name: return None
+    # 1. Check Manual Dictionary
     for key, acro in VENUE_ACRONYMS.items():
         if key.lower() in venue_name.lower(): return acro
+    # 2. Check Parentheses Regex
+    match = re.search(r'\((?P<found>[A-Z0-9-]{2,})\)$', venue_name.strip())
+    if match: return match.group('found')
     return None
 
-def fetch_scholar_data(user_id, target_year):
-    all_papers = []
-    cstart = 0
-    pagesize = 100
-    print(f"Scanning Google Scholar for User {user_id}...")
-    while True:
-        url = f"https://scholar.google.co.in/citations?user={user_id}&hl=en&view_op=list_works&sortby=pubdate&cstart={cstart}&pagesize={pagesize}"
-        soup = get_soup(url)
-        if not soup: break
-        rows = soup.find_all('tr', class_='gsc_a_tr')
-        if not rows: break
-        for row in rows:
-            title_tag = row.find('a', class_='gsc_a_at')
-            title = title_tag.text
-            details_link = "https://scholar.google.co.in" + title_tag['href']
-            gray_divs = row.find_all('div', class_='gs_gray')
-            authors_truncated = gray_divs[0].text if len(gray_divs) > 0 else "Unknown"
-            venue = gray_divs[1].text if len(gray_divs) > 1 else ""
-            year_span = row.find('span', class_='gsc_a_h')
-            year = year_span.text.strip() if year_span else ""
-            
-            if target_year != "ALL":
-                if str(target_year) not in year and str(target_year) not in title: continue
-            
-            venue_clean = venue.split(',')[0].strip()
-            cat = classify_paper(venue_clean)
-            if cat in ["Patents", "Book Chapters"]: continue
+def parse_existing_html(html_file):
+    """Parses existing HTML to find current Max IDs and Titles."""
+    try:
+        with open(html_file, "r", encoding="utf-8") as f:
+            soup = BeautifulSoup(f, "html.parser")
+    except FileNotFoundError:
+        return {"journals": [], "conferences": []}, None, {"J": 0, "C": 0}
 
-            all_papers.append({
-                "title": title, "authors": authors_truncated, "venue": venue_clean,
-                "year": year, "details_url": details_link, "category": cat
-            })
-        if len(rows) < pagesize: break
-        cstart += pagesize
-    return all_papers
-
-def get_full_paper_details(paper_url):
-    print(f"   --> Fetching full details from: {paper_url}...")
-    soup = get_soup(paper_url)
-    if not soup: return None
-    full_data = {}
-    fields = soup.find_all("div", class_="gsc_oci_field")
-    values = soup.find_all("div", class_="gsc_oci_value")
-    for f, v in zip(fields, values):
-        if f.text.strip() == "Authors": full_data['authors'] = v.text.strip()
-    ggi_div = soup.find("div", class_="gsc_oci_title_ggi")
-    if ggi_div and ggi_div.find("a"): full_data['pdf_link'] = ggi_div.find("a")['href']
-    title_link_tag = soup.find("a", class_="gsc_oci_title_link")
-    if title_link_tag: full_data['article_link'] = title_link_tag['href']
-    return full_data
-
-def parse_existing_html_full_structure(html_file):
-    with open(html_file, "r", encoding="utf-8") as f:
-        soup = BeautifulSoup(f, "html.parser")
     parsed_papers = {"journals": [], "conferences": []}
     max_ids = {"J": 0, "C": 0}
+    
     for cat_id in ["journals", "conferences"]:
         container = soup.find("div", id=cat_id)
         if not container: continue
         prefix = "J" if cat_id == "journals" else "C"
+        
         for div in container.find_all("div", class_="filterDiv"):
             year = div.get('data-year', "Unknown")
             for p in div.find_all('p'):
                 text = p.get_text(" ", strip=True)
+                
+                # Extract ID to find max
                 id_match = re.match(rf'^\s*({prefix})(\d+)\.', text)
                 if id_match:
                     num = int(id_match.group(2))
                     if num > max_ids[prefix]: max_ids[prefix] = num
+                
+                # Extract Title for duplicate checking
                 title_match = re.search(r'["“]([^"”]+)["”]', text)
-                title = title_match.group(1) if title_match else "Unknown"
+                title = title_match.group(1) if title_match else ""
+                
+                # Clean content for reconstruction
                 content_cleaned = re.sub(rf'^\s*{prefix}\d+\.\s*', '', p.decode_contents()).strip()
-                parsed_papers[cat_id].append({"title": title, "year": year, "raw_content": content_cleaned, "is_new": False})
+                
+                parsed_papers[cat_id].append({
+                    "title": title, 
+                    "year": year, 
+                    "raw_content": content_cleaned, 
+                    "is_new": False
+                })
     return parsed_papers, soup, max_ids
-
 
 def reconstruct_html(soup, all_data, current_max_ids):
     for cat_id in ["journals", "conferences"]:
@@ -232,23 +174,27 @@ def reconstruct_html(soup, all_data, current_max_ids):
         new_papers = [p for p in all_data[cat_id] if p.get('is_new')]
         old_papers = [p for p in all_data[cat_id] if not p.get('is_new')]
         
-        # Incremental ID Assignment
+        # Assign New IDs
         total_new = len(new_papers)
         for i, paper in enumerate(new_papers):
             paper['new_id'] = f"{prefix}{current_max_ids[prefix] + total_new - i}"
         
+        # Merge and Sort
         final_list = new_papers + old_papers
+        
+        # Clear container
         container = soup.find("div", id=cat_id)
         if not container: continue
         for div in container.find_all("div", class_="filterDiv"): div.decompose()
         
+        # Group by Year
         papers_by_year = {}
         for p in final_list:
-            y = p['year'] if p['year'] else "2025"
+            y = p['year'] if p['year'] else "Unknown"
             if y not in papers_by_year: papers_by_year[y] = []
             papers_by_year[y].append(p)
             
-        sorted_years = sorted(papers_by_year.keys(), key=lambda x: int(x.split('-')[-1]) if any(c.isdigit() for c in x) else 9999, reverse=True)
+        sorted_years = sorted(papers_by_year.keys(), key=lambda x: int(x) if x.isdigit() else 0, reverse=True)
         insert_marker = container.find("div", class_="logo-strip") or container.find("div", class_="section-header")
         
         for year in sorted_years:
@@ -259,114 +205,90 @@ def reconstruct_html(soup, all_data, current_max_ids):
             
             for p in papers_by_year[year]:
                 if p.get('is_new'):
-                    # --- NEW LOGIC START ---
+                    # --- NEW FORMATTING LOGIC ---
                     venue_text = p['venue']
-                    acro = extract_acronym(venue_text) # 1. Check your manual list first
-
-                    # 2. Fallback: Auto-detect (ACRONYM) in parens if not in list
-                    if not acro:
-                        # Regex looks for (ABC) at the end of the string
-                        match = re.search(r'\((?P<found>[A-Z0-9-]{2,})\)$', venue_text.strip())
-                        if match:
-                            acro = match.group('found')
-
-                    # 3. Construction & Cleanup
+                    acro = extract_acronym(venue_text)
                     if acro:
-                        # Remove the acronym from the venue text so it doesn't appear twice
                         venue_text = venue_text.replace(f"({acro})", "").strip()
                         acro_html = f'<b>({acro})</b>'
                     else:
                         acro_html = ""
-                    # --- NEW LOGIC END ---
-
-                    link = p.get('article_link') or p.get('pdf_link') or p['details_url']
+                        
+                    link = p.get('link', '#')
+                    fmt_auth = format_authors(p['authors'])
                     
-                    # Note: Using venue_text (cleaned) + acro_html (bolded)
-                    content = f'{p["new_id"]}. {format_authors(p["authors"])}, "{p["title"]}", in {venue_text} {acro_html} - Jan {year} [ <a href="{link}" target="_blank" class="fa fa-file-pdf-o" style="color:red"></a> <a href="{link}" target="_blank"> Paper Link</a> ]'
+                    content = f'{p["new_id"]}. {fmt_auth}, "{p["title"]}", in {venue_text} {acro_html} - Jan {year} [ <a href="{link}" target="_blank" class="fa fa-file-pdf-o" style="color:red"></a> <a href="{link}" target="_blank"> Paper Link</a> ]'
                 else:
+                    # Restore ID
                     content = f"{prefix}{len(old_papers) - old_papers.index(p)}. {p['raw_content']}"
                 
-                # Safer Append Method
                 p_tag_soup = BeautifulSoup(f"<p>{content}</p>", "html.parser")
-                if p_tag_soup.p:
-                    new_div.append(p_tag_soup.p)
+                if p_tag_soup.p: new_div.append(p_tag_soup.p)
             
             insert_marker.insert_after(new_div)
             insert_marker = new_div
+            
     return soup
 
-
 # ==========================================
-# EXECUTION
+# MAIN EXECUTION
 # ==========================================
-
-
-# ... (Keep all your imports and functions exactly as they are) ...
-
-# ==========================================
-# HEADLESS EXECUTION (For GitHub Actions)
-# ==========================================
-
-
-
 if __name__ == "__main__":
-    # 1. Fetch Data
-    scholar_data = fetch_scholar_data(USER_ID, TARGET_YEAR)
-    parsed_data, soup, max_ids = parse_existing_html_full_structure(HTML_FILE)
+    # 1. Fetch Existing Data
+    parsed_data, soup, max_ids = parse_existing_html(HTML_FILE)
+    if not soup:
+        print("Error: Could not parse HTML file.")
+        exit(1)
 
-    # 2. Identify Missing Papers
-    missing_papers = []
-    all_existing_titles = [p['title'].lower() for p in parsed_data['journals'] + parsed_data['conferences']]
+    # 2. Fetch New Papers via API
+    api_papers = fetch_papers_via_api()
     
-    for sp in scholar_data:
-        # Check fuzzy match to avoid duplicates
-        if not any(fuzz.ratio(sp['title'].lower(), et) > 90 for et in all_existing_titles):
-            missing_papers.append(sp)
+    # 3. Check for Duplicates (Fuzzy Match or Exact Title)
+    missing_papers = []
+    existing_titles = [p['title'].lower().strip() for p in parsed_data['journals'] + parsed_data['conferences']]
+    
+    for new_p in api_papers:
+        is_duplicate = False
+        new_title = new_p['title'].lower().strip()
+        
+        # Exact match check
+        if new_title in existing_titles:
+            is_duplicate = True
+        
+        if not is_duplicate:
+            missing_papers.append(new_p)
 
-    # 3. Process Papers (Headless Mode: Always take ALL new papers)
+    # 4. Generate Report & Update
     report_lines = []
     
     if not missing_papers:
-        msg = "No new papers found for the target year."
+        msg = "No new papers found."
         print(msg)
         report_lines.append(msg)
     else:
-        print(f"Found {len(missing_papers)} new papers. Adding ALL automatically...")
+        print(f"Found {len(missing_papers)} new papers.")
         
-        # In automation, we skip the input() and just iterate over all missing_papers
         for p in missing_papers:
-            details = get_full_paper_details(p['details_url'])
-            if details: p.update(details)
             p['is_new'] = True
-            key = 'journals' if p['category'] == "Journal Papers" else 'conferences'
+            key = 'conferences' if p['category'] == "Conference Papers" else 'journals'
             parsed_data[key].append(p)
-
-        # 4. Save Updated HTML
+            
         updated_soup = reconstruct_html(soup, parsed_data, max_ids)
+        
         with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
             f.write(updated_soup.prettify())
+            
+        # Report Generation
+        report_lines.append(f"UPDATE REPORT ({datetime.date.today()})")
+        report_lines.append(f"New Papers Added: {len(missing_papers)}")
+        report_lines.append("-" * 30)
         
-        success_msg = f"Success! {len(missing_papers)} added. Updated {OUTPUT_FILE}"
-        print(success_msg)
-        
-        # 5. Generate Report for Email
-        report_lines.append("="*60)
-        report_lines.append(f" REPORT: {len(missing_papers)} NEW ENTRIES ADDED")
-        report_lines.append(f" Target Year: {TARGET_YEAR}")
-        report_lines.append("="*60)
+        for p in missing_papers:
+            report_lines.append(f"Title: {p['title']}")
+            report_lines.append(f"Venue: {p['venue']}")
+            report_lines.append(f"Link:  {p['link']}")
+            report_lines.append("-" * 30)
 
-        for cat in ["journals", "conferences"]:
-            new_entries = [p for p in parsed_data[cat] if p.get('is_new')]
-            if new_entries:
-                report_lines.append(f"\n[{cat.upper()}]")
-                for p in new_entries:
-                    raw_auth = p.get('authors', 'Unknown').strip().rstrip(",")
-                    fmt_auth = format_authors(raw_auth)
-                    report_lines.append(f"{p['new_id']}. {fmt_auth}")
-                    report_lines.append(f"    Title: \"{p['title']}...\"")
-                    report_lines.append(f"    Venue: {p['venue']}")
-                    report_lines.append("-" * 40)
-
-    # 6. Save Report to file (Critical for the Email Step)
+    # 5. Write Report
     with open("report.txt", "w", encoding="utf-8") as f:
         f.write("\n".join(report_lines))
