@@ -61,7 +61,7 @@ jobs:
           subject: "Monthly SparcLab Publication Updates"
           
           # ADD MULTIPLE EMAILS HERE (Comma separated)
-          to: jadhav.aryanashok.bme21@itbhu.ac.in,mroycho@purdue.edu
+          to: jadhav.aryanashok.bme21@itbhu.ac.in,saritajadhav9860@gmail.com
           
           from: Aryan Jadhav <${{ secrets.EMAIL_USERNAME }}>
           body: file://report.txt
