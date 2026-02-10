@@ -24,10 +24,12 @@ jobs:
         run: |
           pip install -r requirements.txt
 
-      # 4. Run your Headless Python Script
+
+
+# 4. Run your Headless Python Script
       - name: Run Update Script
         env: 
-          SCHOLAR_COOKIES: ${{ secrets.SCHOLAR_COOKIES }}
+          SERP_API_KEY: ${{ secrets.SERP_API_KEY }}  # <--- CHANGED THIS
         run: python update_publications.py
 
       # 5. Overwrite the old file and Push
