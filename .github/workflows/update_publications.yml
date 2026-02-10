@@ -73,7 +73,7 @@ jobs:
           password: ${{ secrets.EMAIL_PASSWORD }}
           
           subject: "Bot Report: Publications Updated"
-          to: YOUR_EMAIL@gmail.com  # <--- REPLACE THIS WITH YOUR EMAIL
+          to: jadhav.aryanashok.bme21@itbhu.ac.in  # <--- REPLACE THIS WITH YOUR EMAIL
           from: GitHub Bot <${{ secrets.EMAIL_USERNAME }}>
           
           # Use the generated text file as the email body
